@@ -5,7 +5,7 @@ import (
 )
 
 type Router struct {
-	http.Request
+	*http.Request
 	http.ResponseWriter
 }
 
