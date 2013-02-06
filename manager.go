@@ -35,6 +35,7 @@ func NewRouteManager(filterPrefix, appendSuffix, delimiterStyle string) *RouteMa
 	return rm
 }
 
+//if filterPrefix value is '@' that mean not to filter, but it is has hidden danger, so you kown what to do.
 func (rm *RouteManager) FilterPrefix(filterPrefix string) {
 	if filterPrefix == "" {
 		filterPrefix = "Route"
@@ -182,11 +183,27 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 	filterPrefix := rm.filterPrefix
 	appendSuffix := rm.appendSuffix
 	delimiterStyle := rm.delimiterStyle
+	defaultMname := filterPrefix + "Default"
 	rcvi := reflect.ValueOf(i)
 	rcti := rcvi.Type()
+
 	var rcvmi reflect.Value
 	if _, hasInit := rcti.MethodByName("Init"); hasInit {
 		rcvmi = rcvi.MethodByName("Init")
+	}
+
+	var fbm []map[string]string
+	if _, hasFilterBefore := rcti.MethodByName("Filter_Before"); hasFilterBefore {
+		rcvmfb := rcvi.MethodByName("Filter_Before")
+		fbres := rcvmfb.Call([]reflect.Value{})
+		fbm = fbres[0].Interface().([]map[string]string)
+	}
+
+	var fam []map[string]string
+	if _, hasFilterAfter := rcti.MethodByName("Filter_After"); hasFilterAfter {
+		rcvmfa := rcvi.MethodByName("Filter_After")
+		fares := rcvmfa.Call([]reflect.Value{})
+		fam = fares[0].Interface().([]map[string]string)
 	}
 
 	for i := 0; i < rcti.NumMethod(); i++ {
@@ -194,7 +211,7 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 		if pos := strings.Index(mName, filterPrefix); pos == 0 {
 			filterPrefixMname := mName[len(filterPrefix):]
 			pattern := patternRoot
-			if mName != filterPrefix+"Default" {
+			if mName != defaultMname {
 				pattern += strings.ToLower(strings.Replace(filterPrefixMname, "_", delimiterStyle, -1)) + appendSuffix
 			}
 
@@ -202,6 +219,21 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 			var rcvmas []reflect.Value
 			if _, ok := rcti.MethodByName("Before_"); ok {
 				rcvmbs = append(rcvmbs, rcvi.MethodByName("Before_"))
+			}
+
+			if len(fbm) > 0 {
+				for _, fm := range fbm {
+					if fMname, ok := fm["_FILTER"]; ok {
+						allType, aOk := fm["_ALL"]
+						curMType, cmOk := fm[mName]
+
+						if cmOk && curMType == "allow" {
+							rcvmbs = append(rcvmbs, rcvi.MethodByName("Filter_"+fMname))
+						} else if !cmOk && aOk && allType == "allow" {
+							rcvmbs = append(rcvmbs, rcvi.MethodByName("Filter_"+fMname))
+						}
+					}
+				}
 			}
 
 			beforeMname := "Before_" + filterPrefixMname
@@ -212,6 +244,21 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 			afterMname := "After_" + filterPrefixMname
 			if _, ok := rcti.MethodByName(afterMname); ok {
 				rcvmas = append(rcvmas, rcvi.MethodByName(afterMname))
+			}
+
+			if len(fam) > 0 {
+				for _, fm := range fam {
+					if fMname, ok := fm["_FILTER"]; ok {
+						allType, aOk := fm["_ALL"]
+						curMType, cmOk := fm[mName]
+
+						if cmOk && curMType == "allow" {
+							rcvmas = append(rcvmas, rcvi.MethodByName("Filter_"+fMname))
+						} else if !cmOk && aOk && allType == "allow" {
+							rcvmas = append(rcvmas, rcvi.MethodByName("Filter_"+fMname))
+						}
+					}
+				}
 			}
 
 			if _, ok := rcti.MethodByName("After_"); ok {
