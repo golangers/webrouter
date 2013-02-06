@@ -174,15 +174,12 @@ func (rm *RouteManager) handler(host, path string) (h http.Handler, pattern stri
 }
 
 func (rm *RouteManager) Register(patternRoot string, i interface{}) {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
-	if patternRoot[0] != '/' {
-		rm.hosts = true
-	}
-
+	rm.mu.RLock()
 	filterPrefix := rm.filterPrefix
 	appendSuffix := rm.appendSuffix
 	delimiterStyle := rm.delimiterStyle
+	rm.mu.RUnlock()
+
 	defaultMname := filterPrefix + "Default"
 	rcvi := reflect.ValueOf(i)
 	rcti := rcvi.Type()
@@ -265,10 +262,7 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 				rcvmas = append(rcvmas, rcvi.MethodByName("After_"))
 			}
 
-			rm.router[pattern] = &route{
-				pattern: pattern,
-				h:       makeHandler(rcvi.Method(i), rcvmi, rcvmbs, rcvmas),
-			}
+			rm.Handle(pattern, makeHandler(rcvi.Method(i), rcvmi, rcvmbs, rcvmas))
 		}
 	}
 }
@@ -279,6 +273,10 @@ func (rm *RouteManager) Handle(pattern string, handler http.Handler) {
 
 	if pattern[0] != '/' {
 		rm.hosts = true
+	}
+
+	if _, found := rm.router[pattern]; found {
+		panic("http: multiple registrations for " + pattern)
 	}
 
 	rm.router[pattern] = &route{
