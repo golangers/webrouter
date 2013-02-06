@@ -110,15 +110,9 @@ workflow:
 
 rcvmi, rcvmb..., rcvma... Can return one result of bool, if result is ture mean return func
 */
-func makeHandler(rcvm reflect.Value, rcvmi reflect.Value, rcvmbs []reflect.Value, rcvmas []reflect.Value) http.Handler {
+func makeHandler(rcvm reflect.Value, rcvmbs []reflect.Value, rcvmas []reflect.Value) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		rcvw, rcvr := reflect.ValueOf(w), reflect.ValueOf(req)
-		if rcvmi.IsValid() {
-			if arv := callMethod(rcvmi, rcvw, rcvr); len(arv) > 0 && arv[0].Bool() {
-				return
-			}
-		}
-
 		if len(rcvmbs) > 0 {
 			for _, revmb := range rcvmbs {
 				if arv := callMethod(revmb, rcvw, rcvr); len(arv) > 0 && arv[0].Bool() {
@@ -173,6 +167,7 @@ func (rm *RouteManager) handler(host, path string) (h http.Handler, pattern stri
 	return
 }
 
+//Priority: Init > Before_ > Filter_Before > Before_[method] > [method] > After_[method] > Filter_After > After_ > Destroy
 func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 	rm.mu.RLock()
 	filterPrefix := rm.filterPrefix
@@ -185,8 +180,15 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 	rcti := rcvi.Type()
 
 	var rcvmi reflect.Value
-	if _, hasInit := rcti.MethodByName("Init"); hasInit {
+	var hasInit bool
+	if _, hasInit = rcti.MethodByName("Init"); hasInit {
 		rcvmi = rcvi.MethodByName("Init")
+	}
+
+	var rcvmd reflect.Value
+	var hasDestroy bool
+	if _, hasDestroy = rcti.MethodByName("Destroy"); hasDestroy {
+		rcvmd = rcvi.MethodByName("Destroy")
 	}
 
 	var fbm []map[string]string
@@ -206,14 +208,18 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 	for i := 0; i < rcti.NumMethod(); i++ {
 		mName := rcti.Method(i).Name
 		if pos := strings.Index(mName, filterPrefix); pos == 0 {
+			var rcvmbs []reflect.Value
+			var rcvmas []reflect.Value
 			filterPrefixMname := mName[len(filterPrefix):]
 			pattern := patternRoot
 			if mName != defaultMname {
 				pattern += strings.ToLower(strings.Replace(filterPrefixMname, "_", delimiterStyle, -1)) + appendSuffix
 			}
 
-			var rcvmbs []reflect.Value
-			var rcvmas []reflect.Value
+			if hasInit {
+				rcvmbs = append(rcvmbs, rcvmi)
+			}
+
 			if _, ok := rcti.MethodByName("Before_"); ok {
 				rcvmbs = append(rcvmbs, rcvi.MethodByName("Before_"))
 			}
@@ -262,7 +268,11 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 				rcvmas = append(rcvmas, rcvi.MethodByName("After_"))
 			}
 
-			rm.Handle(pattern, makeHandler(rcvi.Method(i), rcvmi, rcvmbs, rcvmas))
+			if hasDestroy {
+				rcvmas = append(rcvmas, rcvmd)
+			}
+
+			rm.Handle(pattern, makeHandler(rcvi.Method(i), rcvmbs, rcvmas))
 		}
 	}
 }
