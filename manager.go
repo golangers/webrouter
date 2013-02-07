@@ -122,7 +122,7 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 	delimiterStyle := rm.delimiterStyle
 	rm.mu.RUnlock()
 
-	defaultMname := filterPrefix + "Default"
+	rootMname := filterPrefix + "Root"
 	rcvi := reflect.ValueOf(i)
 	rcti := rcvi.Type()
 
@@ -159,7 +159,7 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 			var rcvmas []reflect.Value
 			filterPrefixMname := mName[len(filterPrefix):]
 			pattern := patternRoot
-			if mName != defaultMname {
+			if mName != rootMname {
 				pattern += strings.ToLower(strings.Replace(filterPrefixMname, "_", delimiterStyle, -1)) + appendSuffix
 			}
 
@@ -238,4 +238,24 @@ func (rm *RouteManager) NotFoundHtmlHandler(error string) {
 	rm.notFoundHandle = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		Error(w, error, http.StatusNotFound, CtHtmlHeader)
 	})
+}
+
+func (rm *RouteManager) Handler(r *http.Request) (h http.Handler, pattern string) {
+	h, pattern = rm.ServeMux.Handler(r)
+	if pattern == "" && rm.notFoundHandle != nil {
+		h = rm.notFoundHandle
+	}
+
+	return
+}
+
+func (rm *RouteManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.RequestURI == "*" {
+		w.Header().Set("Connection", "close")
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	h, _ := rm.Handler(r)
+	h.ServeHTTP(w, r)
 }
