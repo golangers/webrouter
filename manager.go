@@ -114,7 +114,7 @@ func makeHandler(rcvm reflect.Value, rcvmbs []reflect.Value, rcvmas []reflect.Va
 	})
 }
 
-//Priority: Init > Before_ > Filter_Before > Before_[method] > [method] > After_[method] > Filter_After > After_ > Destroy
+//Priority: Init > Before_ > Filter_Before > Before_[method] > [method] > After_[method] > Filter_After > After_ > Render > Destroy
 func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 	rm.mu.RLock()
 	filterPrefix := rm.filterPrefix
@@ -130,6 +130,12 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 	var hasInit bool
 	if _, hasInit = rcti.MethodByName("Init"); hasInit {
 		rcvmi = rcvi.MethodByName("Init")
+	}
+
+	var rcvmr reflect.Value
+	var hasRender bool
+	if _, hasRender = rcti.MethodByName("Render"); hasRender {
+		rcvmr = rcvi.MethodByName("Render")
 	}
 
 	var rcvmd reflect.Value
@@ -213,6 +219,10 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 
 			if _, ok := rcti.MethodByName("After_"); ok {
 				rcvmas = append(rcvmas, rcvi.MethodByName("After_"))
+			}
+
+			if hasRender {
+				rcvmas = append(rcvmas, rcvmr)
 			}
 
 			if hasDestroy {
