@@ -2,30 +2,23 @@ package webrouter
 
 import (
 	"net/http"
-	"path"
 	"reflect"
 	"strings"
 	"sync"
 )
 
 type RouteManager struct {
-	hosts          bool
+	*http.ServeMux
 	mu             sync.RWMutex
-	router         map[string]*route
 	notFoundHandle http.Handler
 	filterPrefix   string
 	appendSuffix   string
 	delimiterStyle string
 }
 
-type route struct {
-	pattern string
-	h       http.Handler
-}
-
 func NewRouteManager(filterPrefix, appendSuffix, delimiterStyle string) *RouteManager {
 	rm := &RouteManager{
-		router: map[string]*route{},
+		ServeMux: http.NewServeMux(),
 	}
 
 	rm.FilterPrefix(filterPrefix)
@@ -62,20 +55,6 @@ func (rm *RouteManager) DelimiterStyle(delimiterStyle string) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	rm.delimiterStyle = delimiterStyle
-}
-
-func cleanPath(p string) string {
-	if p == "" {
-		return "/"
-	}
-	if p[0] != '/' {
-		p = "/" + p
-	}
-	np := path.Clean(p)
-	if p[len(p)-1] == '/' && np != "/" {
-		np += "/"
-	}
-	return np
 }
 
 func callMethod(rcvm, rcvw, rcvr reflect.Value) (arv []reflect.Value) {
@@ -133,38 +112,6 @@ func makeHandler(rcvm reflect.Value, rcvmbs []reflect.Value, rcvmas []reflect.Va
 			}
 		}
 	})
-}
-
-func (rm *RouteManager) match(p string) (h http.Handler, pattern string) {
-	if r := rm.router[p]; r != nil {
-		h, pattern = r.h, p
-	}
-
-	return
-}
-
-func (rm *RouteManager) handler(host, path string) (h http.Handler, pattern string) {
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-
-	if rm.hosts {
-		h, pattern = rm.match(host + path)
-	}
-
-	if h == nil {
-		h, pattern = rm.match(path)
-	}
-
-	if h == nil {
-		pattern = ""
-		if rm.notFoundHandle == nil {
-			h = http.NotFoundHandler()
-		} else {
-			h = rm.notFoundHandle
-		}
-	}
-
-	return
 }
 
 //Priority: Init > Before_ > Filter_Before > Before_[method] > [method] > After_[method] > Filter_After > After_ > Destroy
@@ -272,42 +219,9 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 				rcvmas = append(rcvmas, rcvmd)
 			}
 
-			rm.Handle(pattern, makeHandler(rcvi.Method(i), rcvmbs, rcvmas))
+			rm.ServeMux.Handle(pattern, makeHandler(rcvi.Method(i), rcvmbs, rcvmas))
 		}
 	}
-}
-
-func (rm *RouteManager) Handle(pattern string, handler http.Handler) {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
-
-	if pattern[0] != '/' {
-		rm.hosts = true
-	}
-
-	if _, found := rm.router[pattern]; found {
-		panic("http: multiple registrations for " + pattern)
-	}
-
-	rm.router[pattern] = &route{
-		pattern: pattern,
-		h:       handler,
-	}
-}
-
-func (rm *RouteManager) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
-	rm.Handle(pattern, http.HandlerFunc(handler))
-}
-
-func (rm *RouteManager) Handler(req *http.Request) (h http.Handler, pattern string) {
-	if req.Method != "CONNECT" {
-		if p := cleanPath(req.URL.Path); p != req.URL.Path {
-			_, pattern = rm.handler(req.Host, p)
-			return http.RedirectHandler(p, http.StatusMovedPermanently), pattern
-		}
-	}
-
-	return rm.handler(req.Host, req.URL.Path)
 }
 
 func (rm *RouteManager) NotFoundHandler(error string) {
@@ -324,37 +238,4 @@ func (rm *RouteManager) NotFoundHtmlHandler(error string) {
 	rm.notFoundHandle = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		Error(w, error, http.StatusNotFound, CtHtmlHeader)
 	})
-}
-
-func (rm *RouteManager) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	if req.RequestURI == "*" {
-		w.Header().Set("Connection", "close")
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	h, _ := rm.Handler(req)
-	h.ServeHTTP(w, req)
-}
-
-func (rm *RouteManager) ListenAndServe(addr string) error {
-	rm.mu.RLock()
-	server := &http.Server{
-		Addr:    addr,
-		Handler: rm,
-	}
-	rm.mu.RUnlock()
-
-	return server.ListenAndServe()
-}
-
-func (rm *RouteManager) ListenAndServeTLS(addr, certFile, keyFile string) error {
-	rm.mu.RLock()
-	server := &http.Server{
-		Addr:    addr,
-		Handler: rm,
-	}
-	rm.mu.RUnlock()
-
-	return server.ListenAndServeTLS(certFile, keyFile)
 }

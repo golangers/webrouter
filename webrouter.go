@@ -25,15 +25,15 @@ func Register(patternRoot string, i interface{}) {
 }
 
 func Handle(pattern string, handler http.Handler) {
-	DefauleRouter.Handle(pattern, handler)
+	DefauleRouter.ServeMux.Handle(pattern, handler)
 }
 
 func HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
-	DefauleRouter.HandleFunc(pattern, handler)
+	DefauleRouter.ServeMux.HandleFunc(pattern, handler)
 }
 
 func Handler(req *http.Request) (h http.Handler, pattern string) {
-	return DefauleRouter.Handler(req)
+	return DefauleRouter.ServeMux.Handler(req)
 }
 
 func NotFoundHandler(error string) {
@@ -46,12 +46,4 @@ func NotFoundHtmlHandler(error string) {
 
 func ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	DefauleRouter.ServeHTTP(w, req)
-}
-
-func ListenAndServe(addr string) error {
-	return DefauleRouter.ListenAndServe(addr)
-}
-
-func ListenAndServeTLS(addr, certFile, keyFile string) error {
-	return DefauleRouter.ListenAndServeTLS(addr, certFile, keyFile)
 }
