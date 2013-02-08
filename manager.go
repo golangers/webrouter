@@ -2,6 +2,7 @@ package webrouter
 
 import (
 	"net/http"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -10,6 +11,8 @@ import (
 type RouteManager struct {
 	*http.ServeMux
 	mu             sync.RWMutex
+	injections     []injector
+	releases       []releasor
 	notFoundHandle http.Handler
 	filterPrefix   string
 	appendSuffix   string
@@ -18,7 +21,9 @@ type RouteManager struct {
 
 func NewRouteManager(filterPrefix, appendSuffix, delimiterStyle string) *RouteManager {
 	rm := &RouteManager{
-		ServeMux: http.NewServeMux(),
+		ServeMux:   http.NewServeMux(),
+		injections: []injector{},
+		releases:   []releasor{},
 	}
 
 	rm.FilterPrefix(filterPrefix)
@@ -57,6 +62,50 @@ func (rm *RouteManager) DelimiterStyle(delimiterStyle string) {
 	rm.delimiterStyle = delimiterStyle
 }
 
+func (rm *RouteManager) Injector(name, follower string, priority uint, handler func(w http.ResponseWriter, r *http.Request)) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	if hasSameInjector(rm.injections, name) {
+		panic("multiple registrations injector for " + name)
+		os.Exit(-1)
+	}
+
+	rm.injections = append(rm.injections, injector{
+		name:     name,
+		follower: follower,
+		priority: int(priority),
+		h:        http.HandlerFunc(handler),
+	})
+}
+
+func (rm *RouteManager) SortInjector() {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rm.injections = sortInjector(rm.injections)
+}
+
+func (rm *RouteManager) Releasor(name, leader string, lag uint, handler func(w http.ResponseWriter, r *http.Request)) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	if hasSameReleasor(rm.releases, name) {
+		panic("multiple registrations releasor for " + name)
+		os.Exit(-1)
+	}
+
+	rm.releases = append(rm.releases, releasor{
+		name:   name,
+		leader: leader,
+		lag:    int(lag),
+		h:      http.HandlerFunc(handler),
+	})
+}
+
+func (rm *RouteManager) SortReleasor() {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rm.releases = sortReleasor(rm.releases)
+}
+
 func callMethod(rcvm, rcvw, rcvr reflect.Value) (arv []reflect.Value) {
 	mt := rcvm.Type()
 	mtni := mt.NumIn()
@@ -84,17 +133,24 @@ func callMethod(rcvm, rcvw, rcvr reflect.Value) (arv []reflect.Value) {
 workflow:
 1. rcvmi => reflect.ValueOf(router.Init)
 2. rcvmbs => reflect.ValueOf(router.Before_) & reflect.ValueOf(router.Before_[method])
-3. rcvm => reflect.ValueOf(router.[method])
-4. rcvmas => reflect.ValueOf(router.After_[method] & reflect.ValueOf(router.After_)
+3. rcvmhm => reflect.ValueOf(router.Http_<http's Method>_[method])
+4. rcvm => reflect.ValueOf(router.[method])
+5. rcvmas => reflect.ValueOf(router.After_[method] & reflect.ValueOf(router.After_)
 
-rcvmi, rcvmb..., rcvma... Can return one result of bool, if result is ture mean return func
+rcvmi, rcvmm, rcvmb..., rcvma... Can return one result of bool, if result is ture mean return func
 */
-func makeHandler(rcvm reflect.Value, rcvmbs []reflect.Value, rcvmas []reflect.Value) http.Handler {
+func makeHandler(rcvm reflect.Value, rcvmhm map[string]reflect.Value, rcvmbs []reflect.Value, rcvmas []reflect.Value) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		rcvw, rcvr := reflect.ValueOf(w), reflect.ValueOf(req)
-		if len(rcvmbs) > 0 {
-			for _, revmb := range rcvmbs {
-				if arv := callMethod(revmb, rcvw, rcvr); len(arv) > 0 && arv[0].Bool() {
+		for _, rcvmb := range rcvmbs {
+			if arv := callMethod(rcvmb, rcvw, rcvr); len(arv) > 0 && arv[0].Bool() {
+				return
+			}
+		}
+
+		for httpMethod, rcvmm := range rcvmhm {
+			if httpMethod == req.Method {
+				if arv := callMethod(rcvmm, rcvw, rcvr); len(arv) > 0 && arv[0].Bool() {
 					return
 				}
 			}
@@ -104,14 +160,37 @@ func makeHandler(rcvm reflect.Value, rcvmbs []reflect.Value, rcvmas []reflect.Va
 			return
 		}
 
-		if len(rcvmas) > 0 {
-			for _, rcvma := range rcvmas {
-				if arv := callMethod(rcvma, rcvw, rcvr); len(arv) > 0 && arv[0].Bool() {
-					return
-				}
+		for _, rcvma := range rcvmas {
+			if arv := callMethod(rcvma, rcvw, rcvr); len(arv) > 0 && arv[0].Bool() {
+				return
 			}
 		}
+
 	})
+}
+
+// rcvhm[objMethod][httpMethod] = reflect.Value
+func findHttpMethod(rcti reflect.Type, rcvi reflect.Value) map[string]map[string]reflect.Value {
+	rcvhm := make(map[string]map[string]reflect.Value)
+
+	for i := 0; i < rcti.NumMethod(); i++ {
+		mName := rcti.Method(i).Name
+		if hpos := strings.Index(mName, "Http_"); hpos != -1 {
+			hpMname := mName[hpos+len("Http_"):]
+			if mpos := strings.Index(hpMname, "_"); mpos != -1 {
+				httpMethod := hpMname[:mpos]
+				//len("_") == 1
+				objMethod := hpMname[mpos+1:]
+				if rcvhm[objMethod] == nil {
+					rcvhm[objMethod] = make(map[string]reflect.Value)
+				}
+
+				rcvhm[objMethod][strings.ToUpper(httpMethod)] = rcvi.Method(i)
+			}
+		}
+	}
+
+	return rcvhm
 }
 
 //Priority: Init > Before_ > Filter_Before > Before_[method] > [method] > After_[method] > Filter_After > After_ > Render > Destroy
@@ -125,6 +204,9 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 	rootMname := filterPrefix + "Root"
 	rcvi := reflect.ValueOf(i)
 	rcti := rcvi.Type()
+
+	var rcvhm map[string]map[string]reflect.Value
+	rcvhm = findHttpMethod(rcti, rcvi)
 
 	var rcvmi reflect.Value
 	var hasInit bool
@@ -181,7 +263,7 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 				for _, fm := range fbm {
 					if fMname, ok := fm["_FILTER"]; ok {
 						allType, aOk := fm["_ALL"]
-						curMType, cmOk := fm[mName]
+						curMType, cmOk := fm[filterPrefixMname]
 
 						if cmOk && curMType == "allow" {
 							rcvmbs = append(rcvmbs, rcvi.MethodByName("Filter_"+fMname))
@@ -206,7 +288,7 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 				for _, fm := range fam {
 					if fMname, ok := fm["_FILTER"]; ok {
 						allType, aOk := fm["_ALL"]
-						curMType, cmOk := fm[mName]
+						curMType, cmOk := fm[filterPrefixMname]
 
 						if cmOk && curMType == "allow" {
 							rcvmas = append(rcvmas, rcvi.MethodByName("Filter_"+fMname))
@@ -229,7 +311,7 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 				rcvmas = append(rcvmas, rcvmd)
 			}
 
-			rm.ServeMux.Handle(pattern, makeHandler(rcvi.Method(i), rcvmbs, rcvmas))
+			rm.ServeMux.Handle(pattern, makeHandler(rcvi.Method(i), rcvhm[filterPrefixMname], rcvmbs, rcvmas))
 		}
 	}
 }
@@ -259,6 +341,7 @@ func (rm *RouteManager) Handler(r *http.Request) (h http.Handler, pattern string
 	return
 }
 
+//processing order: injector > handler > releasor
 func (rm *RouteManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.RequestURI == "*" {
 		w.Header().Set("Connection", "close")
@@ -266,6 +349,17 @@ func (rm *RouteManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+
+	for _, injection := range rm.injections {
+		injection.h.ServeHTTP(w, r)
+	}
+
 	h, _ := rm.Handler(r)
 	h.ServeHTTP(w, r)
+
+	for _, release := range rm.releases {
+		release.h.ServeHTTP(w, r)
+	}
 }

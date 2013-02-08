@@ -47,3 +47,35 @@ func NotFoundHtmlHandler(error string) {
 func ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	DefauleRouter.ServeHTTP(w, req)
 }
+
+func Injector(name, follower string, priority uint, handler func(w http.ResponseWriter, r *http.Request)) {
+	DefauleRouter.Injector(name, follower, priority, handler)
+}
+
+func SortInjector() {
+	DefauleRouter.SortInjector()
+}
+
+func Releasor(name, leader string, lag uint, handler func(w http.ResponseWriter, r *http.Request)) {
+	DefauleRouter.Releasor(name, leader, lag, handler)
+}
+
+func SortReleasor() {
+	DefauleRouter.SortReleasor()
+}
+
+func ListenAndServe(addr string, handler http.Handler) error {
+	if handler == nil {
+		return http.ListenAndServe(addr, DefauleRouter)
+	}
+
+	return http.ListenAndServe(addr, handler)
+}
+
+func ListenAndServeTLS(addr, certFile, keyFile string, handler http.Handler) error {
+	if handler == nil {
+		return http.ListenAndServeTLS(addr, certFile, keyFile, DefauleRouter)
+	}
+
+	return http.ListenAndServeTLS(addr, certFile, keyFile, handler)
+}
