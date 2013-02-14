@@ -19,6 +19,12 @@ type RouteManager struct {
 	delimiterStyle string
 }
 
+type filterMethod struct {
+	method string
+	param  []string
+	rcvm   reflect.Value
+}
+
 func NewRouteManager(filterPrefix, appendSuffix, delimiterStyle string) *RouteManager {
 	rm := &RouteManager{
 		ServeMux:   http.NewServeMux(),
@@ -131,26 +137,53 @@ func callMethod(rcvm, rcvw, rcvr reflect.Value) (arv []reflect.Value) {
 
 /*
 workflow:
-1. rcvmi => reflect.ValueOf(router.Init)
-2. rcvmbs => reflect.ValueOf(router.Before_) & reflect.ValueOf(router.Before_[method])
-3. rcvmhm => reflect.ValueOf(router.Http_<http's Method>_[method])
-4. rcvm => reflect.ValueOf(router.[method])
-5. rcvmas => reflect.ValueOf(router.After_[method] & reflect.ValueOf(router.After_)
+1.  router.Init
+2.  router.Before_
+3.  router.Before_[method]
+4.  router.Filter_Before
+5.  router.Http_<http's Method>_[method]
+6.  router.[method]
+7.  router.Filter_After
+8.  router.After_[method
+9.  router.After_
+10. router.Render
+11. router.Destroy
 
-rcvmi, rcvmm, rcvmb..., rcvma... Can return one result of bool, if result is ture mean return func
+router.Xxx Can return one result of bool, if result is ture mean return func
 */
-func makeHandler(rcvm reflect.Value, rcvmhm map[string]reflect.Value, rcvmbs []reflect.Value, rcvmas []reflect.Value) http.Handler {
+func makeHandler(rcvm reflect.Value, rcvmbs []reflect.Value, rcvmfb []filterMethod, rcvmfa []filterMethod, rcvmas []reflect.Value) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var parsedForm bool
 		rcvw, rcvr := reflect.ValueOf(w), reflect.ValueOf(req)
+
 		for _, rcvmb := range rcvmbs {
 			if arv := callMethod(rcvmb, rcvw, rcvr); len(arv) > 0 && arv[0].Bool() {
 				return
 			}
 		}
 
-		for httpMethod, rcvmm := range rcvmhm {
-			if httpMethod == req.Method {
-				if arv := callMethod(rcvmm, rcvw, rcvr); len(arv) > 0 && arv[0].Bool() {
+		for _, fm := range rcvmfb {
+			if fm.method != "" && fm.method != req.Method {
+				continue
+			}
+
+			call := true
+			if len(fm.param) > 0 {
+				if !parsedForm {
+					req.ParseForm()
+					parsedForm = true
+				}
+
+				for _, param := range fm.param {
+					if _, ok := req.Form[param]; !ok {
+						call = false
+						break
+					}
+				}
+			}
+
+			if call {
+				if arv := callMethod(fm.rcvm, rcvw, rcvr); len(arv) > 0 && arv[0].Bool() {
 					return
 				}
 			}
@@ -158,6 +191,33 @@ func makeHandler(rcvm reflect.Value, rcvmhm map[string]reflect.Value, rcvmbs []r
 
 		if arv := callMethod(rcvm, rcvw, rcvr); len(arv) > 0 && arv[0].Bool() {
 			return
+		}
+
+		for _, fm := range rcvmfa {
+			if fm.method != "" && fm.method != req.Method {
+				continue
+			}
+
+			call := true
+			if len(fm.param) > 0 {
+				if !parsedForm {
+					req.ParseForm()
+					parsedForm = true
+				}
+
+				for _, p := range fm.param {
+					if _, ok := req.Form[p]; !ok {
+						call = false
+						break
+					}
+				}
+			}
+
+			if call {
+				if arv := callMethod(fm.rcvm, rcvw, rcvr); len(arv) > 0 && arv[0].Bool() {
+					return
+				}
+			}
 		}
 
 		for _, rcvma := range rcvmas {
@@ -169,9 +229,8 @@ func makeHandler(rcvm reflect.Value, rcvmhm map[string]reflect.Value, rcvmbs []r
 	})
 }
 
-// rcvhm[objMethod][httpMethod] = reflect.Value
-func findHttpMethod(rcti reflect.Type, rcvi reflect.Value) map[string]map[string]reflect.Value {
-	rcvhm := make(map[string]map[string]reflect.Value)
+func findHttpMethod(rcti reflect.Type, rcvi reflect.Value) map[string][]filterMethod {
+	rcvhm := make(map[string][]filterMethod)
 
 	for i := 0; i < rcti.NumMethod(); i++ {
 		mName := rcti.Method(i).Name
@@ -181,11 +240,11 @@ func findHttpMethod(rcti reflect.Type, rcvi reflect.Value) map[string]map[string
 				httpMethod := hpMname[:mpos]
 				//len("_") == 1
 				objMethod := hpMname[mpos+1:]
-				if rcvhm[objMethod] == nil {
-					rcvhm[objMethod] = make(map[string]reflect.Value)
-				}
 
-				rcvhm[objMethod][strings.ToUpper(httpMethod)] = rcvi.Method(i)
+				rcvhm[objMethod] = append(rcvhm[objMethod], filterMethod{
+					method: httpMethod,
+					rcvm:   rcvi.Method(i),
+				})
 			}
 		}
 	}
@@ -193,7 +252,7 @@ func findHttpMethod(rcti reflect.Type, rcvi reflect.Value) map[string]map[string
 	return rcvhm
 }
 
-//Priority: Init > Before_ > Filter_Before > Before_[method] > [method] > After_[method] > Filter_After > After_ > Render > Destroy
+//Priority: Init > Before_ > Before_[method] > Filter_Before > Http_<http's Method>_[method] > [method] > Filter_After > After_[method] > After_ > Render > Destroy
 func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 	rm.mu.RLock()
 	filterPrefix := rm.filterPrefix
@@ -205,7 +264,7 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 	rcvi := reflect.ValueOf(i)
 	rcti := rcvi.Type()
 
-	var rcvhm map[string]map[string]reflect.Value
+	var rcvhm map[string][]filterMethod
 	rcvhm = findHttpMethod(rcti, rcvi)
 
 	var rcvmi reflect.Value
@@ -243,8 +302,11 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 	for i := 0; i < rcti.NumMethod(); i++ {
 		mName := rcti.Method(i).Name
 		if pos := strings.Index(mName, filterPrefix); pos == 0 {
-			var rcvmbs []reflect.Value
-			var rcvmas []reflect.Value
+			var (
+				rcvmbs, rcvmas []reflect.Value
+				rcvmfb, rcvmfa []filterMethod
+			)
+
 			filterPrefixMname := mName[len(filterPrefix):]
 			pattern := patternRoot
 			if mName != rootMname {
@@ -265,10 +327,30 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 						allType, aOk := fm["_ALL"]
 						curMType, cmOk := fm[filterPrefixMname]
 
-						if cmOk && curMType == "allow" {
-							rcvmbs = append(rcvmbs, rcvi.MethodByName("Filter_"+fMname))
-						} else if !cmOk && aOk && allType == "allow" {
-							rcvmbs = append(rcvmbs, rcvi.MethodByName("Filter_"+fMname))
+						switch {
+						case cmOk && curMType == "allow":
+							fallthrough
+						case !cmOk && aOk && allType == "allow":
+							var httpParams []string
+							if fm["_PARAM"] != "" {
+								httpParams = strings.Split(fm["_PARAM"], "&")
+							}
+
+							if fm["_METHOD"] == "" {
+								rcvmfb = append(rcvmfb, filterMethod{
+									param: httpParams,
+									rcvm:  rcvi.MethodByName("Filter_" + fMname),
+								})
+							} else {
+								httpMethods := strings.Split(fm["_METHOD"], "|")
+								for _, httpMethod := range httpMethods {
+									rcvmfb = append(rcvmfb, filterMethod{
+										method: httpMethod,
+										param:  httpParams,
+										rcvm:   rcvi.MethodByName("Filter_" + fMname),
+									})
+								}
+							}
 						}
 					}
 				}
@@ -290,10 +372,30 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 						allType, aOk := fm["_ALL"]
 						curMType, cmOk := fm[filterPrefixMname]
 
-						if cmOk && curMType == "allow" {
-							rcvmas = append(rcvmas, rcvi.MethodByName("Filter_"+fMname))
-						} else if !cmOk && aOk && allType == "allow" {
-							rcvmas = append(rcvmas, rcvi.MethodByName("Filter_"+fMname))
+						switch {
+						case cmOk && curMType == "allow":
+							fallthrough
+						case !cmOk && aOk && allType == "allow":
+							var httpParams []string
+							if fm["_PARAM"] != "" {
+								httpParams = strings.Split(fm["_PARAM"], "&")
+							}
+
+							if fm["_METHOD"] == "" {
+								rcvmfa = append(rcvmfa, filterMethod{
+									param: httpParams,
+									rcvm:  rcvi.MethodByName("Filter_" + fMname),
+								})
+							} else {
+								httpMethods := strings.Split(fm["_METHOD"], "|")
+								for _, httpMethod := range httpMethods {
+									rcvmfa = append(rcvmfa, filterMethod{
+										method: httpMethod,
+										param:  httpParams,
+										rcvm:   rcvi.MethodByName("Filter_" + fMname),
+									})
+								}
+							}
 						}
 					}
 				}
@@ -311,7 +413,8 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 				rcvmas = append(rcvmas, rcvmd)
 			}
 
-			rm.ServeMux.Handle(pattern, makeHandler(rcvi.Method(i), rcvhm[filterPrefixMname], rcvmbs, rcvmas))
+			rcvmfb = append(rcvmfb, rcvhm[filterPrefixMname]...)
+			rm.ServeMux.Handle(pattern, makeHandler(rcvi.Method(i), rcvmbs, rcvmfb, rcvmfa, rcvmas))
 		}
 	}
 }
