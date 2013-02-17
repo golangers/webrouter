@@ -257,24 +257,24 @@ NewPattern => new[delimiterStyle]pattern
 delimiterStyle => -
 NewPattern => new-pattern
 */
-func formatPattern(pattern string, delimiterStyle byte) string {
+func makePattern(method string, delimiterStyle byte) string {
 	var c byte
 	bl := byte('a' - 'A')
-	lp := len(pattern)
-	newPattern := make([]byte, 0, lp+8)
-	for i := 0; i < lp; i++ {
-		c = pattern[i]
+	l := len(method)
+	pattern := make([]byte, 0, l+8)
+	for i := 0; i < l; i++ {
+		c = method[i]
 		if c >= 'A' && c <= 'Z' {
 			c += bl
 			if i > 0 {
-				newPattern = append(newPattern, delimiterStyle)
+				pattern = append(pattern, delimiterStyle)
 			}
 		}
 
-		newPattern = append(newPattern, c)
+		pattern = append(pattern, c)
 	}
 
-	return string(newPattern)
+	return string(pattern)
 }
 
 //Priority: Init > Before_ > Before_[method] > Filter_Before > Http_<http's Method>_[method] > [method] > Filter_After > After_[method] > After_ > Render > Destroy
@@ -335,7 +335,7 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 			filterPrefixMname := mName[len(filterPrefix):]
 			pattern := patternRoot
 			if mName != defaultMname {
-				pattern += formatPattern(filterPrefixMname, delimiterStyle) + appendSuffix
+				pattern += makePattern(filterPrefixMname, delimiterStyle) + appendSuffix
 			}
 
 			if hasInit {
