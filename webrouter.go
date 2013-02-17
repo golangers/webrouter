@@ -5,7 +5,7 @@ import (
 )
 
 var (
-	DefauleRouter = NewRouteManager("", "", "")
+	DefauleRouter = NewRouteManager("", "", 0)
 )
 
 func FilterPrefix(filterPrefix string) {
@@ -16,7 +16,7 @@ func AppendSuffix(appendSuffix string) {
 	DefauleRouter.AppendSuffix(appendSuffix)
 }
 
-func DelimiterStyle(delimiterStyle string) {
+func DelimiterStyle(delimiterStyle byte) {
 	DefauleRouter.DelimiterStyle(delimiterStyle)
 }
 

@@ -16,7 +16,7 @@ type RouteManager struct {
 	notFoundHandle http.Handler
 	filterPrefix   string
 	appendSuffix   string
-	delimiterStyle string
+	delimiterStyle byte
 }
 
 type filterMethod struct {
@@ -25,7 +25,7 @@ type filterMethod struct {
 	rcvm   reflect.Value
 }
 
-func NewRouteManager(filterPrefix, appendSuffix, delimiterStyle string) *RouteManager {
+func NewRouteManager(filterPrefix, appendSuffix string, delimiterStyle byte) *RouteManager {
 	rm := &RouteManager{
 		ServeMux:   http.NewServeMux(),
 		injections: []injector{},
@@ -58,9 +58,9 @@ func (rm *RouteManager) AppendSuffix(appendSuffix string) {
 	rm.appendSuffix = appendSuffix
 }
 
-func (rm *RouteManager) DelimiterStyle(delimiterStyle string) {
-	if delimiterStyle == "" {
-		delimiterStyle = "_"
+func (rm *RouteManager) DelimiterStyle(delimiterStyle byte) {
+	if delimiterStyle == 0 {
+		delimiterStyle = '-'
 	}
 
 	rm.mu.Lock()
@@ -252,6 +252,31 @@ func findHttpMethod(rcti reflect.Type, rcvi reflect.Value) map[string][]filterMe
 	return rcvhm
 }
 
+/*
+NewPattern => new[delimiterStyle]pattern
+delimiterStyle => -
+NewPattern => new-pattern
+*/
+func formatPattern(pattern string, delimiterStyle byte) string {
+	var c byte
+	bl := byte('a' - 'A')
+	lp := len(pattern)
+	newPattern := make([]byte, 0, lp+8)
+	for i := 0; i < lp; i++ {
+		c = pattern[i]
+		if c >= 'A' && c <= 'Z' {
+			c += bl
+			if i > 0 {
+				newPattern = append(newPattern, delimiterStyle)
+			}
+		}
+
+		newPattern = append(newPattern, c)
+	}
+
+	return string(newPattern)
+}
+
 //Priority: Init > Before_ > Before_[method] > Filter_Before > Http_<http's Method>_[method] > [method] > Filter_After > After_[method] > After_ > Render > Destroy
 func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 	rm.mu.RLock()
@@ -260,7 +285,7 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 	delimiterStyle := rm.delimiterStyle
 	rm.mu.RUnlock()
 
-	rootMname := filterPrefix + "Root"
+	defaultMname := filterPrefix + "Default"
 	rcvi := reflect.ValueOf(i)
 	rcti := rcvi.Type()
 
@@ -309,8 +334,8 @@ func (rm *RouteManager) Register(patternRoot string, i interface{}) {
 
 			filterPrefixMname := mName[len(filterPrefix):]
 			pattern := patternRoot
-			if mName != rootMname {
-				pattern += strings.ToLower(strings.Replace(filterPrefixMname, "_", delimiterStyle, -1)) + appendSuffix
+			if mName != defaultMname {
+				pattern += formatPattern(filterPrefixMname, delimiterStyle) + appendSuffix
 			}
 
 			if hasInit {
