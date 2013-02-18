@@ -9,7 +9,7 @@ type releasor struct {
 	name   string
 	leader string
 	lag    int
-	h      http.Handler
+	h      func(http.ResponseWriter, *http.Request) bool
 }
 
 type releasors []releasor

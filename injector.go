@@ -9,7 +9,7 @@ type injector struct {
 	name     string
 	follower string
 	priority int
-	h        http.Handler
+	h        func(http.ResponseWriter, *http.Request) bool
 }
 
 type injectors []injector

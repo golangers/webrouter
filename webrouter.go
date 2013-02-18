@@ -48,7 +48,7 @@ func ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	DefauleRouter.ServeHTTP(w, req)
 }
 
-func Injector(name, follower string, priority uint, handler func(w http.ResponseWriter, r *http.Request)) {
+func Injector(name, follower string, priority uint, handler func(http.ResponseWriter, *http.Request) bool) {
 	DefauleRouter.Injector(name, follower, priority, handler)
 }
 
@@ -56,7 +56,7 @@ func SortInjector() {
 	DefauleRouter.SortInjector()
 }
 
-func Releasor(name, leader string, lag uint, handler func(w http.ResponseWriter, r *http.Request)) {
+func Releasor(name, leader string, lag uint, handler func(http.ResponseWriter, *http.Request) bool) {
 	DefauleRouter.Releasor(name, leader, lag, handler)
 }
 

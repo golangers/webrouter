@@ -68,7 +68,7 @@ func (rm *RouteManager) DelimiterStyle(delimiterStyle byte) {
 	rm.delimiterStyle = delimiterStyle
 }
 
-func (rm *RouteManager) Injector(name, follower string, priority uint, handler func(w http.ResponseWriter, r *http.Request)) {
+func (rm *RouteManager) Injector(name, follower string, priority uint, handler func(http.ResponseWriter, *http.Request) bool) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	if hasSameInjector(rm.injections, name) {
@@ -80,7 +80,7 @@ func (rm *RouteManager) Injector(name, follower string, priority uint, handler f
 		name:     name,
 		follower: follower,
 		priority: int(priority),
-		h:        http.HandlerFunc(handler),
+		h:        handler,
 	})
 }
 
@@ -90,7 +90,7 @@ func (rm *RouteManager) SortInjector() {
 	rm.injections = sortInjector(rm.injections)
 }
 
-func (rm *RouteManager) Releasor(name, leader string, lag uint, handler func(w http.ResponseWriter, r *http.Request)) {
+func (rm *RouteManager) Releasor(name, leader string, lag uint, handler func(http.ResponseWriter, *http.Request) bool) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	if hasSameReleasor(rm.releases, name) {
@@ -102,7 +102,7 @@ func (rm *RouteManager) Releasor(name, leader string, lag uint, handler func(w h
 		name:   name,
 		leader: leader,
 		lag:    int(lag),
-		h:      http.HandlerFunc(handler),
+		h:      handler,
 	})
 }
 
@@ -481,13 +481,17 @@ func (rm *RouteManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer rm.mu.RUnlock()
 
 	for _, injection := range rm.injections {
-		injection.h.ServeHTTP(w, r)
+		if ret := injection.h(w, r); ret {
+			return
+		}
 	}
 
 	h, _ := rm.Handler(r)
 	h.ServeHTTP(w, r)
 
 	for _, release := range rm.releases {
-		release.h.ServeHTTP(w, r)
+		if ret := release.h(w, r); ret {
+			return
+		}
 	}
 }
